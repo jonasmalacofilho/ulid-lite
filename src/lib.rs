@@ -1,5 +1,4 @@
 use core::fmt::{Display, Formatter, LowerHex, Result, UpperHex};
-use libc::{self};
 use std::{slice::from_raw_parts_mut, time::SystemTime};
 use std::os::raw::c_char;
 
@@ -124,6 +123,7 @@ impl UpperHex for Ulid {
     }
 }
 
+
 /// Sets the seed of the internal random number generator.
 ///
 /// This function is provided so that you can retain
@@ -183,12 +183,12 @@ pub unsafe extern "C" fn ulid_seed(s: u32) {
 /// Note: Callers should ensure that `ulid_init()` or `ulid_seed()`
 ///       has been called before this function.
 #[no_mangle]
-pub unsafe extern "C" fn ulid_new() -> Box<UlidArray> {
+pub unsafe extern "C" fn ulid_new() -> *mut UlidArray {
     let id: UlidArray = Ulid::new().into();
-    Box::new(id)
+    Box::into_raw(Box::new(id))
 }
 
-/// Create a new ULID and encodes it as a Crockford Base32 string.
+/// Create a new ULID and encode it as a null-terminated Crockford Base32 string.
 ///
 /// Note: Callers should ensure that `ulid_init()` or `ulid_seed()`
 ///       has been called before this function.
@@ -198,8 +198,8 @@ pub unsafe extern "C" fn ulid_new() -> Box<UlidArray> {
 #[no_mangle]
 pub unsafe extern "C" fn ulid_new_string() -> *mut c_char {
     let mut id = Ulid::new().to_string();
-    id.push_str("\0");
-    let ptr = id.as_mut_ptr();
+    id.push('\0');
+    let ptr = id.into_bytes().leak().as_mut_ptr();
     std::mem::transmute(ptr) // legal because of the base32 alphabet
 }
 
@@ -209,8 +209,10 @@ pub unsafe extern "C" fn ulid_new_string() -> *mut c_char {
 /// has been called before this function.
 ///
 /// Warning: callers must ensure that `buf` is (at least) 26 bytes.
+///
+/// Warning: the written string is *not* null-terminated.
 #[no_mangle]
-pub unsafe extern "C" fn ulid_write_new(buf: &mut c_char) {
+pub unsafe extern "C" fn ulid_write_new(buf: *mut c_char) {
     let id = Ulid::new();
     let slice = from_raw_parts_mut(buf, ULID_LEN);
     base32::encode(id.bits, std::mem::transmute(slice));
@@ -218,9 +220,12 @@ pub unsafe extern "C" fn ulid_write_new(buf: &mut c_char) {
 
 #[cfg(test)]
 mod that {
+    use std::ffi::CStr;
+
     use super::*;
 
     #[test]
+    #[cfg(not(miri))]  // too slow, probably due to the ~5000 Vec allocations
     fn each_ulid_is_unique() {
         use itertools::Itertools;
 
@@ -239,5 +244,68 @@ mod that {
         sleep(Duration::from_millis(2));
         let b = ulid();
         assert!(a < b);
+    }
+
+    #[test]
+    #[cfg(miri)]
+    fn cffi_init_does_not_trigger_miri() {
+        unsafe { ulid_init() };
+    }
+
+    #[test]
+    #[cfg(miri)]
+    fn cffi_seed_does_not_trigger_miri() {
+        unsafe { ulid_seed(42) };
+    }
+
+    #[test]
+    fn cffi_new_is_not_obviously_unsound() {
+        unsafe { ulid_init() };
+
+        let ptr: *mut [u8; 16] = unsafe { ulid_new() };
+        assert!(!ptr.is_null());
+
+        let reconst = unsafe{ Box::from_raw(ptr) };
+        assert_ne!(reconst[0], 0);  // unless we're back in 1970
+    }
+
+    #[test]
+    fn cffi_new_string_is_not_obviously_unsound() {
+        unsafe { ulid_init() };
+
+        let ptr: *mut c_char = unsafe { ulid_new_string() };
+        assert!(!ptr.is_null());
+
+        let reconst = unsafe { CStr::from_ptr(ptr) };
+        assert_eq!(reconst.to_str().unwrap().len(), ULID_LEN);
+    }
+
+    #[test]
+    fn cffi_write_new_is_not_obviously_unsound() {
+        unsafe { ulid_init() };
+
+        let mut buf = [0 as c_char; ULID_LEN];
+        unsafe { ulid_write_new(&mut buf as *mut _) };
+
+        assert!(buf.iter().all(|&c| char::from(c as u8).is_ascii_alphanumeric()));
+    }
+}
+
+/// Hack: mock libc functions to run the tests in Miri
+#[cfg(miri)]
+mod libc {
+    use std::os::raw::{c_int, c_uint};
+
+    #[allow(non_camel_case_types)]
+    type time_t = i64;
+
+    pub unsafe fn rand() -> c_int {
+        42
+    }
+
+    pub unsafe fn srand(_: c_uint) {}
+
+    pub unsafe fn time(_: *mut time_t) -> time_t {
+        42
     }
 }

@@ -24,7 +24,7 @@ void ulid_seed(uint32_t s);
 UlidArray *ulid_new(void);
 
 /**
- * Create a new ULID and encodes it as a Crockford Base32 string.
+ * Create a new ULID and encode it as a null-terminated Crockford Base32 string.
  *
  * Note: Callers should ensure that `ulid_init()` or `ulid_seed()`
  *       has been called before this function.
@@ -41,5 +41,7 @@ char *ulid_new_string(void);
  * has been called before this function.
  *
  * Warning: callers must ensure that `buf` is (at least) 26 bytes.
+ *
+ * Warning: the written string is *not* null-terminated.
  */
-void ulid_write_new(char *buf);
+void ulid_write_new(uint8_t *buf);
