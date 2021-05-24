@@ -1,4 +1,4 @@
-.PHONY: all bench clean test install
+.PHONY: all bench clean examples test install
 all: target/release/libulid.rlib
 all: target/release/libulid.so
 all: target/release/ulid
@@ -16,6 +16,19 @@ test: target/release/ulid
 	cargo test -- --test-threads=1
 	# isolation is disabled to access the system clock
 	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test
+
+examples: target/release/minimal
+examples: target/release/check_return
+	LD_LIBRARY_PATH=target/release target/release/minimal
+	LD_LIBRARY_PATH=target/release target/release/check_return
+
+EXAMPLE_CFLAGS = -Wall -fsanitize=address,leak,undefined -g
+
+target/release/minimal: examples/minimal.c lib/ulid.h target/release/libulid.so
+	gcc ${EXAMPLE_CFLAGS} -Ilib -lulid -Ltarget/release -o $@ $<
+
+target/release/check_return: examples/check_return.c lib/ulid.h target/release/libulid.so
+	gcc ${EXAMPLE_CFLAGS} -Ilib -lulid -Ltarget/release -o $@ $<
 
 bench:
 	cargo bench
